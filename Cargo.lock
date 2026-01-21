@@ -95,7 +95,7 @@ dependencies = [
  "cfg-if",
  "log",
  "memory_addr 0.1.0",
- "page_table_entry",
+ "page_table_entry 0.1.0",
  "xmas-elf",
 ]
 
@@ -116,22 +116,6 @@ dependencies = [
  "log",
  "regex",
  "termcolor",
-]
-
-[[package]]
-name = "hal"
-version = "0.0.0"
-source = "git+https://github.com/rosy233333/vsched_hal.git#be4f44ef8e66f99a6ea06ca1411e505b1a1b1a5c"
-dependencies = [
- "aarch64-cpu 10.0.0",
- "cfg-if",
- "linkme",
- "memory_addr 0.4.0",
- "page_table_entry",
- "riscv",
- "static_assertions",
- "x86",
- "x86_64",
 ]
 
 [[package]]
@@ -229,6 +213,18 @@ dependencies = [
  "aarch64-cpu 9.4.0",
  "bitflags 2.9.4",
  "memory_addr 0.1.0",
+ "x86_64",
+]
+
+[[package]]
+name = "page_table_entry"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dda9891ec368fda90e4b2cc36592b4881073e25a339fe7e3eddd811f0cf6bf18"
+dependencies = [
+ "aarch64-cpu 10.0.0",
+ "bitflags 2.9.4",
+ "memory_addr 0.4.0",
  "x86_64",
 ]
 
@@ -386,7 +382,7 @@ dependencies = [
  "libvdsoexample",
  "log",
  "memmap2",
- "page_table_entry",
+ "page_table_entry 0.1.0",
  "xmas-elf",
 ]
 
@@ -401,7 +397,7 @@ dependencies = [
 name = "vdso_helper"
 version = "0.1.0"
 dependencies = [
- "hal",
+ "vsched_hal",
 ]
 
 [[package]]
@@ -409,6 +405,23 @@ name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
+
+[[package]]
+name = "vsched_hal"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2b4383b05f5161712f03988daf29592ff11499cf63bbe5b27ceea58030e9be6"
+dependencies = [
+ "aarch64-cpu 10.0.0",
+ "cfg-if",
+ "linkme",
+ "memory_addr 0.4.0",
+ "page_table_entry 0.5.7",
+ "riscv",
+ "static_assertions",
+ "x86",
+ "x86_64",
+]
 
 [[package]]
 name = "winapi"
