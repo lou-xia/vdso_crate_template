@@ -14,10 +14,12 @@ pub(crate) fn gen_api(config: &BuildConfig) {
     let cargo_toml = cargo_toml_content(config);
     let lib_rs = lib_rs_content(config);
     let api_rs = api_rs_content(config);
+    let loader_rs = loader_rs_content(config);
 
     fs::write(&lib_path.join("Cargo.toml"), cargo_toml).unwrap();
     fs::write(&src_path.join("lib.rs"), lib_rs).unwrap();
     fs::write(&src_path.join("api.rs"), api_rs).unwrap();
+    fs::write(&src_path.join("loader.rs"), loader_rs).unwrap();
 }
 
 fn cargo_toml_content(config: &BuildConfig) -> String {
@@ -30,6 +32,11 @@ edition = "2021"
 [dependencies]
 {} = {{ path = "{}" }}
 log = {{ version = "0.4", optional = true }}
+crate_interface = "0.2"
+page_table_entry = "0.5.7"
+include_bytes_aligned = "0.1.4"
+xmas-elf = "0.9.0"
+elf_parser = {{ git = "https://github.com/rosy233333/elf_parser.git" }}
 
 [features]
 log = ["dep:log"]
@@ -46,6 +53,10 @@ fn lib_rs_content(_config: &BuildConfig) -> String {
         r#"#![no_std]
 pub mod api;
 pub use api::*;
+pub mod loader;
+pub use loader::*;
+
+extern crate alloc;
 "#,
     )
 }
@@ -134,6 +145,15 @@ fn api_rs_content(config: &BuildConfig) -> String {
     "#,
     );
 
+    fn_init_vdso_vtable_str.push_str(
+        r#"
+pub fn load_and_init() {
+    let vdso = crate::load_so();
+    unsafe{ init_vdso_vtable(vdso as _) };
+}
+"#,
+    );
+
     // 构建给内核和用户运行时使用的接口
     let mut apis = vec![];
     for (name, args) in fns.iter() {
@@ -195,3 +215,174 @@ pub fn {}{} {{
 const INIT_VDSO_VTABLE_STR: &str = r#"
 pub unsafe fn init_vdso_vtable(base: u64) {
 "#;
+
+fn loader_rs_content(config: &BuildConfig) -> String {
+    let use_content = format!(
+        r#"use alloc::string::ToString;
+use core::str::from_utf8;
+use crate_interface::{{call_interface, def_interface}};
+use include_bytes_aligned::include_bytes_aligned;
+pub use page_table_entry::MappingFlags;
+use {}::VvarData;
+use xmas_elf::program::SegmentData;
+"#,
+        config.package_name
+    );
+
+    let interface_content = String::from(
+        r#"
+#[def_interface]
+pub trait MemIf {
+    /// 分配用于vDSO和vVAR的空间，返回指向首地址的指针。
+    ///
+    /// 若需要实现vDSO和vVAR在多地址空间的共享，则需要在分配时使这块空间可被共享。
+    fn alloc(size: usize) -> *mut u8;
+
+    /// 从`alloc`返回的空间中，设置其中一块的访问权限。
+    ///
+    /// `flags`可能包含：READ、WRITE、EXECUTE、USER。
+    fn protect(addr: *mut u8, len: usize, flags: MappingFlags);
+}
+"#,
+    );
+
+    let const_content = format!(
+        r#"
+const PAGES_SIZE: usize = {};
+const VDSO: &[u8] = include_bytes_aligned!(8, "../../{}.so");
+const VDSO_SIZE: usize = ((VDSO.len() + PAGES_SIZE - 1) & (!(PAGES_SIZE - 1))) + PAGES_SIZE; // 额外加了一页，用于bss段等未出现在文件中的段
+const VVAR_SIZE: usize = (core::mem::size_of::<VvarData>() + PAGES_SIZE - 1) & (!(PAGES_SIZE - 1));
+"#,
+        config.page_size, config.so_name
+    );
+
+    let load_so_content = String::from(
+        r#"
+pub fn load_so() -> *mut u8 {
+    let vdso_map = call_interface!(MemIf::alloc(VVAR_SIZE + VDSO_SIZE));
+    #[cfg(feature = "log")]
+    {
+        log::info!(
+            "vVAR: [0x{:016x}, 0x{:016x})",
+            vdso_map as usize,
+            (vdso_map as usize) + VVAR_SIZE
+        );
+        log::info!(
+            "vDSO: [0x{:016x}, 0x{:016x})",
+            (vdso_map as usize) + VVAR_SIZE,
+            (vdso_map as usize) + VVAR_SIZE + VDSO_SIZE
+        );
+    }
+
+    // vVAR初始化
+    #[cfg(feature = "log")]
+    log::info!("mapping vVAR...");
+    #[cfg(feature = "log")]
+    log::info!(
+        "protect: [0x{:016x}, 0x{:016x}), {:?}",
+        vdso_map as usize,
+        (vdso_map as usize) + core::mem::size_of::<VvarData>(),
+        MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER
+    );
+    call_interface!(MemIf::protect(
+        vdso_map,
+        core::mem::size_of::<VvarData>(),
+        MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER
+    ));
+    unsafe { (vdso_map as *mut _ as *mut VvarData).write(VvarData::default()) };
+
+    // vDSO初始化
+    #[cfg(feature = "log")]
+    log::info!("mapping vDSO...");
+
+    let vdso_elf = xmas_elf::ElfFile::new(VDSO).expect("Error parsing app ELF file.");
+    if let Some(interp) = vdso_elf
+        .program_iter()
+        .find(|ph| ph.get_type() == Ok(xmas_elf::program::Type::Interp))
+    {
+        let interp = match interp.get_data(&vdso_elf) {
+            Ok(SegmentData::Undefined(data)) => data,
+            _ => panic!("Invalid data in Interp Elf Program Header"),
+        };
+
+        let interp_path = from_utf8(interp).expect("Interpreter path isn't valid UTF-8");
+        // remove trailing '\0'
+        let _interp_path = interp_path.trim_matches(char::from(0)).to_string();
+        #[cfg(feature = "log")]
+        log::debug!("Interpreter path: {:?}", _interp_path);
+    }
+    let elf_base_addr = Some((vdso_map as usize) + VVAR_SIZE);
+    let segments = elf_parser::get_elf_segments(&vdso_elf, elf_base_addr);
+    let relocate_pairs = elf_parser::get_relocate_pairs(&vdso_elf, elf_base_addr);
+    for segment in segments {
+        if segment.size == 0 {
+            #[cfg(feature = "log")]
+            log::warn!(
+                "Segment with size 0 found, skipping: {:?}, {:#x}, {:?}",
+                segment.vaddr,
+                segment.size,
+                segment.flags
+            );
+            continue;
+        }
+        #[cfg(feature = "log")]
+        log::debug!(
+            "{:?}, {:#x}, {:?}",
+            segment.vaddr,
+            segment.size,
+            segment.flags
+        );
+
+        if let Some(data) = segment.data {
+            assert!(data.len() <= segment.size);
+            let src = data.as_ptr();
+            let dst = segment.vaddr.as_usize() as *mut u8;
+            let count = data.len();
+            unsafe {
+                core::ptr::copy_nonoverlapping(src, dst, count);
+                if segment.size > count {
+                    core::ptr::write_bytes(dst.add(count), 0, segment.size - count);
+                }
+            }
+        } else {
+            unsafe { core::ptr::write_bytes(segment.vaddr.as_usize() as *mut u8, 0, segment.size) };
+        }
+
+        #[cfg(feature = "log")]
+        log::info!(
+            "protect: [0x{:016x}, 0x{:016x}), {:?}",
+            segment.vaddr.as_usize(),
+            segment.vaddr.as_usize() + segment.size,
+            segment.flags
+        );
+        call_interface!(MemIf::protect(
+            segment.vaddr.as_usize() as *mut u8,
+            segment.size,
+            segment.flags
+        ));
+    }
+
+    for relocate_pair in relocate_pairs {
+        let src: usize = relocate_pair.src.into();
+        let dst: usize = relocate_pair.dst.into();
+        let count = relocate_pair.count;
+        #[cfg(feature = "log")]
+        log::info!(
+            "Relocate: src: 0x{:x}, dst: 0x{:x}, count: {}",
+            src,
+            dst,
+            count
+        );
+        unsafe { core::ptr::copy_nonoverlapping(src.to_ne_bytes().as_ptr(), dst as *mut u8, count) }
+    }
+
+    #[cfg(feature = "log")]
+    log::info!("mapping complete!");
+
+    ((vdso_map as usize) + VVAR_SIZE) as _
+}
+"#,
+    );
+
+    use_content + &interface_content + &const_content + &load_so_content
+}

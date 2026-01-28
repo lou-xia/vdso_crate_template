@@ -25,6 +25,8 @@ pub struct BuildConfig {
     /// 编译vDSO使用的工具链版本
     /// 默认为"nightly"，可指定具体版本号，如"nightly-2025-09-12"
     pub toolchain: String,
+    /// 页大小，默认为4096（0x1000）
+    pub page_size: usize,
 }
 
 impl BuildConfig {
@@ -58,6 +60,7 @@ impl BuildConfig {
             verbose: 0,
             api_lib_name: "lib".to_string() + package_name,
             toolchain: "nightly".to_string(),
+            page_size: 0x1000,
         }
     }
 }
