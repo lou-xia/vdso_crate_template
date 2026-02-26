@@ -65,6 +65,7 @@ macro_rules! mut_cfg {
 macro_rules! use_mut_cfg {
     () => {
 #[rustfmt::skip]
+#[allow(missing_docs)]
 mod mut_cfgs {
     include!(concat!(env!("OUT_DIR"), "/mut_cfgs.rs"));
 }
