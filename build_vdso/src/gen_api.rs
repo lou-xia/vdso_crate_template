@@ -63,6 +63,8 @@ extern crate alloc;
 
 fn api_rs_content(config: &BuildConfig) -> String {
     // 修改自https://github.com/AsyncModules/vsched/blob/e728dadd75aeb8da5cec1642320a6bd24af5b5bb/vsched_apis/build.rs的build_vsched_api函数
+
+    // 获取vDSO的 api
     let api_rs_path = Path::new(&config.src_dir)
         .join("src")
         .join("api")
@@ -81,7 +83,7 @@ fn api_rs_content(config: &BuildConfig) -> String {
         r#"#\[unsafe\(no_mangle\)\]pub extern \"C\" fn ([a-zA-Z0-9_]+)(\([a-zA-Z0-9_:]?[^\{]*\)[->]?[^\{]*) \{"#,
     )
     .unwrap();
-    // 获取共享调度器的 api
+
     let mut fns = vec![];
     for (_, [name, args]) in re
         .captures_iter(&vsched_api_file_content)
@@ -90,6 +92,43 @@ fn api_rs_content(config: &BuildConfig) -> String {
         // println!("name: {}\nargs: {}", name, args);
         fns.push((name, args));
     }
+
+    let interface_rs_path = Path::new(&config.src_dir)
+        .join("src")
+        .join("interface")
+        .with_extension("rs");
+    // println!("api.rs path: {}", api_rs_path.display());
+    let mut vsched_interface_file_content = fs::read_to_string(&interface_rs_path).unwrap();
+    vsched_interface_file_content = vsched_interface_file_content.split('\n').collect();
+    vsched_interface_file_content = vsched_interface_file_content.split('\t').collect();
+    vsched_interface_file_content = vsched_interface_file_content.split("    ").collect();
+    println!(
+        "cargo:warning=vsched_interface_file_content: {}",
+        vsched_interface_file_content
+    );
+
+    let re = regex::Regex::new(r#"pub trait ([a-zA-Z0-9_]+) \{([^\{\}]+)\}"#).unwrap();
+    // let re = regex::Regex::new(r#"pub trait ([a-zA-Z0-9_]+)\{(.)?"#).unwrap();
+
+    // 获取vDSO的 interface
+    let mut traits = vec![];
+    for (_, [name, fns]) in re
+        .captures_iter(&vsched_interface_file_content)
+        .map(|c| c.extract())
+    {
+        let mut fns_name = vec![];
+        let fns_name_re = regex::Regex::new(r#"fn ([a-zA-Z0-9_]+)\("#).unwrap();
+        fns_name_re
+            .captures_iter(&fns)
+            .map(|c| c.extract())
+            .for_each(|(_, [fn_name])| {
+                fns_name.push(fn_name);
+            });
+        traits.push((name, fns_name));
+    }
+    // println!("cargo:warning=traits: {:?}", traits);
+    // panic!("pause");
+
     // pub use vdso库中的内容
     let pub_use_vdso_str = format!(
         "extern crate {};\npub use self::{}::*;\n\n",
@@ -100,6 +139,19 @@ fn api_rs_content(config: &BuildConfig) -> String {
     for (name, args) in fns.iter() {
         vdso_vtable_struct_str.push_str(&format!("    pub {}: Option<fn{}>,\n", name, args));
     }
+    for (name, fns_name) in traits.iter() {
+        let init_fn_name = format!("init_vtable_{}", name);
+        let args = format!(
+            "({})",
+            fns_name
+                .iter()
+                .map(|_fn_name| "usize")
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        vdso_vtable_struct_str
+            .push_str(&format!("    pub {}: Option<fn{}>,\n", init_fn_name, args));
+    }
     vdso_vtable_struct_str.push_str("}\n");
 
     // 定义静态的 VDSO_VTABLE
@@ -107,6 +159,10 @@ fn api_rs_content(config: &BuildConfig) -> String {
         "\nstatic mut VDSO_VTABLE: VdsoVTable = VdsoVTable {\n".to_string();
     for (name, _) in fns.iter() {
         static_vdso_vtable_str.push_str(&format!("    {}: None,\n", name));
+    }
+    for (name, _) in traits.iter() {
+        let init_fn_name = format!("init_vtable_{}", name);
+        static_vdso_vtable_str.push_str(&format!("    {}: None,\n", init_fn_name));
     }
     static_vdso_vtable_str.push_str("};\n");
 
@@ -117,6 +173,7 @@ fn api_rs_content(config: &BuildConfig) -> String {
         _ => panic!("Invalid data in .dynsym section"),
     };
     let mut fn_init_vdso_vtable_str = INIT_VDSO_VTABLE_STR.to_string();
+
     for (name, args) in fns.iter() {
         let mut sym_value: usize = 0;
         for dynsym in dyn_sym_table {
@@ -140,6 +197,45 @@ fn api_rs_content(config: &BuildConfig) -> String {
             name, sym_value, name, args, name
         ));
     }
+
+    for (name, fns_name) in traits.iter() {
+        let init_fn_name = format!("init_vtable_{}", name);
+        let mut sym_value: usize = 0;
+        for dynsym in dyn_sym_table {
+            let sym_name = dynsym.get_name(&vdso_elf).unwrap();
+            if sym_name == init_fn_name.as_str() {
+                sym_value = dynsym.value() as usize;
+                break;
+            }
+        }
+        assert!(
+            sym_value != 0,
+            "Function {} not found in .dynsym",
+            init_fn_name
+        );
+
+        let args = format!(
+            "({})",
+            fns_name
+                .iter()
+                .map(|_fn_name| "usize")
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        fn_init_vdso_vtable_str.push_str(&format!(
+            r#"    // {}:
+    let fn_ptr = base + 0x{:x};
+    #[cfg(feature = "log")]
+    log::debug!("{}: 0x{{:x}}", fn_ptr);
+    let f: fn{} = unsafe {{ core::mem::transmute(fn_ptr) }};
+    unsafe {{ VDSO_VTABLE.{}  = Some(f); }}
+
+"#,
+            init_fn_name, sym_value, init_fn_name, args, init_fn_name
+        ));
+    }
+
     fn_init_vdso_vtable_str.push_str(
         r#"}
     "#,
@@ -156,6 +252,8 @@ pub fn load_and_init() {
 
     // 构建给内核和用户运行时使用的接口
     let mut apis = vec![];
+
+    // api部分
     for (name, args) in fns.iter() {
         let re = regex::Regex::new(r#"\(([a-zA-Z0-9_:]?.*)\)"#).unwrap();
         let mut fn_args = String::new();
@@ -197,6 +295,33 @@ pub fn {}{} {{
             name, args, name, name, fn_args, name
         ));
     }
+
+    // trait的初始化api部分
+    for (name, fns_name) in traits.iter() {
+        let init_fn_name = format!("init_vtable_{}", name);
+
+        let fn_args = fns_name
+            .iter()
+            .map(|fn_name| format!("T::{} as usize", fn_name))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        apis.push(format!(
+            r#"
+pub fn {}<T:{}>() {{
+    if let Some(f) = unsafe {{ VDSO_VTABLE.{} }} {{
+        #[cfg(feature = "log")]
+        log::debug!("Calling {} at 0x{{:x}}.", f as *const () as usize);
+        f({})
+    }} else {{
+        panic!("{} is not initialized")
+    }}
+}}
+"#,
+            init_fn_name, name, init_fn_name, init_fn_name, fn_args, init_fn_name
+        ));
+    }
+
     // println!("apis: {:?}", apis);
 
     let mut api_content = String::new();

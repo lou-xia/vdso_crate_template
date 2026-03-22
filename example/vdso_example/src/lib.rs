@@ -25,11 +25,13 @@
 #![no_std]
 
 mod api;
+mod interface;
 
 use core::sync::atomic::AtomicUsize;
 use vdso_helper::vvar_data;
 
 pub use api::*;
+pub use interface::*;
 
 vvar_data! {
     example: AtomicUsize

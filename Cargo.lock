@@ -149,6 +149,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ee796ad498c8d9a1d68e477df8f754ed784ef875de1414ebdaf169f70a6a784"
 
 [[package]]
+name = "lazyinit"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17f03abfebdaaf0fad16790237a0348baf84886d3ade460db13bae59e614a180"
+
+[[package]]
 name = "libc"
 version = "0.2.177"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -409,6 +415,7 @@ dependencies = [
 name = "vdso_example"
 version = "0.1.0"
 dependencies = [
+ "lazyinit",
  "vdso_helper",
 ]
 
@@ -416,6 +423,8 @@ dependencies = [
 name = "vdso_helper"
 version = "0.1.0"
 dependencies = [
+ "lazyinit",
+ "paste",
  "vsched_hal",
 ]
 

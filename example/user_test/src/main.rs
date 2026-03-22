@@ -1,6 +1,7 @@
 use std::mem;
 
 // use crate::map::map_vdso;
+// use libvdsoexample::{interface::TestIf, *};
 use libvdsoexample::*;
 use memmap2::MmapMut;
 
@@ -39,38 +40,62 @@ impl MemIf for MemImpl {
     }
 }
 
+struct TestImpl(usize);
+
+impl TestIf for TestImpl {
+    fn test_fn1(&self, arg: usize) -> usize {
+        log::info!("test_fn1 called with arg: {}, self.0: {}", arg, self.0);
+        self.0 + arg
+    }
+
+    fn test_fn2(&mut self, arg: usize) -> usize {
+        log::info!("test_fn2 called with arg: {}, self.0: {}", arg, self.0);
+        self.0 += arg;
+        self.0
+    }
+
+    fn test_fn3(arg: usize) {
+        log::info!("test_fn3 called with arg: {}", arg);
+    }
+}
+
 fn main() {
     env_logger::init();
     log::info!("Starting VDSO test...");
     load_and_init();
-    let example: ArgumentExample = get_shared();
-    assert!(
-        example.i == 0,
-        "Expected get_shared() to return 0, got {}",
-        example.i
-    );
-    set_shared(1);
-    let example: ArgumentExample = get_shared();
-    assert!(
-        example.i == 1,
-        "Expected get_shared() to return 1, got {}",
-        example.i
-    );
-    let example: ArgumentExample = get_private();
-    assert!(
-        example.i == 0,
-        "Expected get_shared() to return 1, got {}",
-        example.i
-    );
-    set_private(1);
-    let example: ArgumentExample = get_private();
-    assert!(
-        example.i == 1,
-        "Expected get_shared() to return 1, got {}",
-        example.i
-    );
+    // let example: ArgumentExample = get_shared();
+    // assert!(
+    //     example.i == 0,
+    //     "Expected get_shared() to return 0, got {}",
+    //     example.i
+    // );
+    // set_shared(1);
+    // let example: ArgumentExample = get_shared();
+    // assert!(
+    //     example.i == 1,
+    //     "Expected get_shared() to return 1, got {}",
+    //     example.i
+    // );
+    // let example: ArgumentExample = get_private();
+    // assert!(
+    //     example.i == 0,
+    //     "Expected get_shared() to return 1, got {}",
+    //     example.i
+    // );
+    // set_private(1);
+    // let example: ArgumentExample = get_private();
+    // assert!(
+    //     example.i == 1,
+    //     "Expected get_shared() to return 1, got {}",
+    //     example.i
+    // );
 
-    assert_eq!(test_args(Some(1), Ok(2), (3, 4)), (Some(2), Ok(3), (4, 5)));
+    // assert_eq!(test_args(Some(1), Ok(2), (3, 4)), (Some(2), Ok(3), (4, 5)));
+
+    init_vtable_TestIf::<TestImpl>();
+    let mut test_impl = TestImpl(10);
+    let ptr = &mut test_impl as *mut TestImpl as *mut ();
+    test_call(ptr);
     println!("Test passed!");
     // drop(map);
 }

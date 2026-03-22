@@ -11,3 +11,5 @@ edition.workspace = true
 
 [dependencies]
 hal = { version = "0.1.0", package = "vsched_hal" }
+lazyinit = "0.2"
+paste = "1.0"

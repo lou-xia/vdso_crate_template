@@ -7,4 +7,8 @@
 #![deny(missing_docs)]
 
 pub mod mut_cfg;
+pub mod trait_interface;
 pub mod vvar_data;
+
+pub use lazyinit;
+pub use paste;

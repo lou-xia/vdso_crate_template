@@ -5,3 +5,4 @@ edition.workspace = true
 
 [dependencies]
 vdso_helper = { workspace = true }
+lazyinit = "0.2"
