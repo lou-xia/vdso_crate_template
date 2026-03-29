@@ -131,7 +131,7 @@ fn api_rs_content(config: &BuildConfig) -> String {
 
     // pub use vdso库中的内容
     let pub_use_vdso_str = format!(
-        "extern crate {};\npub use self::{}::*;\n\n",
+        "extern crate {};\nuse alloc::vec::Vec;\npub use page_table_entry::MappingFlags;\npub use self::{}::*;\n\n",
         config.package_name, config.package_name
     );
     // vdso_vtable 数据结构定义
@@ -243,9 +243,16 @@ fn api_rs_content(config: &BuildConfig) -> String {
 
     fn_init_vdso_vtable_str.push_str(
         r#"
-pub fn load_and_init() {
-    let vdso = crate::load_so();
+/// 在加载vDSO的地址空间（通常是内核）中调用，同时加载vDSO和初始化VTABLE。
+/// 
+/// 该函数的返回值为vDSO和vVAR的映射区域的信息，元组的三项依次为首地址、大小和访问权限。vDSO首地址为第二个映射区域的首地址。
+/// 
+/// 在调用该库的其余API前，需先调用此函数。
+pub fn load_and_init() -> Vec<(*mut u8, usize, MappingFlags)> {
+    let regions = crate::load_so();
+    let vdso = regions[1].0; // vDSO首地址为第二个映射区域的首地址，因为第一个是vVAR。
     unsafe{ init_vdso_vtable(vdso as _) };
+    regions
 }
 "#,
     );
@@ -338,6 +345,9 @@ pub fn {}<T:{}>() {{
 }
 
 const INIT_VDSO_VTABLE_STR: &str = r#"
+/// 在自身不加载vDSO，而是已经映射了vDSO的地址空间（通常是用户进程）中调用，传入vDSO的首地址以初始化VTABLE。
+/// 
+/// 在调用该库的其余API前，需先调用此函数。
 pub unsafe fn init_vdso_vtable(base: u64) {
 "#;
 
@@ -350,6 +360,7 @@ use include_bytes_aligned::include_bytes_aligned;
 pub use page_table_entry::MappingFlags;
 use {}::VvarData;
 use xmas_elf::program::SegmentData;
+use alloc::vec::Vec;
 "#,
         config.package_name
     );
@@ -383,8 +394,9 @@ const VVAR_SIZE: usize = (core::mem::size_of::<VvarData>() + PAGES_SIZE - 1) & (
 
     let load_so_content = String::from(
         r#"
-pub fn load_so() -> *mut u8 {
+pub fn load_so() -> Vec<(*mut u8, usize, MappingFlags)> {
     let vdso_map = call_interface!(MemIf::alloc(VVAR_SIZE + VDSO_SIZE));
+    let mut regions = Vec::new();
     #[cfg(feature = "log")]
     {
         log::info!(
@@ -414,6 +426,7 @@ pub fn load_so() -> *mut u8 {
         core::mem::size_of::<VvarData>(),
         MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER
     ));
+    regions.push((vdso_map, core::mem::size_of::<VvarData>(), MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER));
     unsafe { (vdso_map as *mut _ as *mut VvarData).write(VvarData::default()) };
 
     // vDSO初始化
@@ -485,6 +498,7 @@ pub fn load_so() -> *mut u8 {
             segment.size,
             segment.flags
         ));
+        regions.push((segment.vaddr.as_usize() as *mut u8, segment.size, segment.flags));
     }
 
     for relocate_pair in relocate_pairs {
@@ -504,7 +518,8 @@ pub fn load_so() -> *mut u8 {
     #[cfg(feature = "log")]
     log::info!("mapping complete!");
 
-    ((vdso_map as usize) + VVAR_SIZE) as _
+    // ((vdso_map as usize) + VVAR_SIZE) as _
+    regions
 }
 "#,
     );

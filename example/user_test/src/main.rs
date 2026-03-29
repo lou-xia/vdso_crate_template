@@ -62,7 +62,14 @@ impl TestIf for TestImpl {
 fn main() {
     env_logger::init();
     log::info!("Starting VDSO test...");
-    load_and_init();
+    let regions = load_and_init();
+    println!("vDSO and vVAR loaded with the following regions:");
+    for (i, (addr, size, flags)) in regions.iter().enumerate() {
+        println!(
+            "Region {}: Address = 0x{:016x}, Size = {}, Flags = {:?}",
+            i, *addr as usize, size, flags
+        );
+    }
     // let example: ArgumentExample = get_shared();
     // assert!(
     //     example.i == 0,
