@@ -11,17 +11,23 @@
 /// 这样声明的接口应该放在`interface.rs`中，这样`build_vdso`就会为`init_vtable_$name`函数生成调用vDSO内函数的接口，就像其为`api.rs`中的函数生成接口一样。
 #[macro_export]
 macro_rules! trait_interface {
-    (pub trait $name:ident { $(fn $fn_name:ident $args:tt $(-> $ret:ty)?;)+ }) => {
+    ($(#[doc = $trait_doc:literal])* pub trait $name:ident { $($(#[doc = $fn_doc:literal])* fn $fn_name:ident $args:tt $(-> $ret:ty)?;)+ }) => {
+        $(#[doc = $trait_doc])*
         pub trait $name {
-            $(fn $fn_name $args $(-> $ret)?;)+
+            $(
+                $(#[doc = $fn_doc])*
+                fn $fn_name $args $(-> $ret)?;
+            )+
         }
 
         $crate::paste::paste! {
+            #[allow(missing_docs)]
             pub(crate) static [<$name _TABLE>]: $crate::lazyinit::LazyInit<[usize; $crate::count!($($fn_name)+)]> = $crate::lazyinit::LazyInit::new();
         }
 
         $crate::paste::paste! {
             #[repr(usize)]
+            #[allow(missing_docs)]
             pub(crate) enum [<$name _FnIndex>] {
                 $($fn_name),+
             }
@@ -29,16 +35,19 @@ macro_rules! trait_interface {
 
         $crate::paste::paste! {
             #[unsafe(no_mangle)]
+            #[allow(missing_docs)]
             pub extern "C" fn [<init_vtable_ $name>]($($fn_name : usize),+) {
                 [<$name _TABLE>].init_once([$($fn_name),+]);
             }
         }
 
         $crate::paste::paste! {
+            #[allow(missing_docs)]
             pub(crate) struct [<$name VirtImpl>];
         }
 
         $crate::paste::paste! {
+            #[allow(missing_docs)]
             impl [<$name VirtImpl>] {
                 pub unsafe fn from_ptr(ptr: *const ()) -> &'static Self {
                     unsafe { &*(ptr as *const Self) }
@@ -59,6 +68,7 @@ macro_rules! trait_interface {
         }
 
         $crate::paste::paste! {
+            #[allow(missing_docs)]
             impl $name for [<$name VirtImpl>] {
                 $(
                     fn $fn_name $args $(-> $ret)? {
@@ -85,11 +95,11 @@ macro_rules! count {
 /// 将函数的参数列表转化为函数类型
 #[macro_export]
 macro_rules! fn_ptr_type {
-    ((&self, $($arg:ident: $arg_ty:ty),*) $(-> $ret:ty)?) => {
-        fn(&Self, $($arg_ty),*) $(-> $ret)?
+    ((&self $(,$arg:ident: $arg_ty:ty)*) $(-> $ret:ty)?) => {
+        fn(&Self $(, $arg_ty)*) $(-> $ret)?
     };
-    ((&mut self, $($arg:ident: $arg_ty:ty),*) $(-> $ret:ty)?) => {
-        fn(&mut Self, $($arg_ty),*) $(-> $ret)?
+    ((&mut self $(,$arg:ident: $arg_ty:ty)*) $(-> $ret:ty)?) => {
+        fn(&mut Self $(, $arg_ty)*) $(-> $ret)?
     };
     (($($arg:ident: $arg_ty:ty),*) $(-> $ret:ty)?) => {
         fn($($arg_ty),*) $(-> $ret)?
@@ -99,11 +109,11 @@ macro_rules! fn_ptr_type {
 /// 将函数的参数列表转化为函数调用时的参数列表
 #[macro_export]
 macro_rules! fn_call {
-    ($fn_name:ident (&$self:ident, $($arg:ident: $arg_ty:ty),*)) => {
-        $fn_name($self, $($arg),*)
+    ($fn_name:ident (&$self:ident $(, $arg:ident: $arg_ty:ty)*)) => {
+        $fn_name($self $(, $arg)*)
     };
-    ($fn_name:ident (&mut $self:ident, $($arg:ident: $arg_ty:ty),*)) => {
-        $fn_name($self, $($arg),*)
+    ($fn_name:ident (&mut $self:ident $(, $arg:ident: $arg_ty:ty)*)) => {
+        $fn_name($self $(, $arg)*)
     };
     ($fn_name:ident ($($arg:ident: $arg_ty:ty),*)) => {
         $fn_name($($arg),*)
