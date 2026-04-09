@@ -24,7 +24,7 @@
 /// - 若表达式中引用的常量被环境变量覆盖，则引用的值为环境变量的值。
 #[macro_export]
 macro_rules! mut_cfg {
-    ($(const $i:ident: $t:ty = $d:expr;)*) => {
+    ($($(#[doc = $doc:literal])* const $i:ident: $t:ty = $d:expr;)*) => {
         use std::path::Path;
         use std::option::Option;
         use std::result::Result;
@@ -39,6 +39,9 @@ macro_rules! mut_cfg {
         let mut mut_cfg = String::new();
 
         $(
+            $(
+                mut_cfg += format!("///{}\n", $doc).as_str();
+            )*
             mut_cfg += format!(
                     r#"pub const {}: {} = {};
 "#,

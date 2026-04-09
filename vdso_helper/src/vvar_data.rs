@@ -25,12 +25,15 @@
 /// - 在项目各处通过[`get_vvar_data!`](`crate::get_vvar_data!`)获取共享数据结构的引用。
 #[macro_export]
 macro_rules! vvar_data {
-    ($($i:ident: $t:ty),* $(,)?) => {
+    ($($(#[doc = $doc:literal])* $i:ident: $t:ty),* $(,)?) => {
         #[allow(missing_docs)]
         #[derive(Default)]
         #[repr(C)]
         pub struct VvarData {
-            $(pub $i: $t),*
+            $(
+                $(#[doc = $doc])*
+                pub $i: $t
+            ),*
         }
 
         trait VvarDataRequirements: Default + Sync {}
