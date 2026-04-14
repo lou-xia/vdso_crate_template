@@ -437,8 +437,7 @@ checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
 [[package]]
 name = "vsched_hal"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2b4383b05f5161712f03988daf29592ff11499cf63bbe5b27ceea58030e9be6"
+source = "git+https://github.com/rosy233333/vsched_hal.git#dee679657967967bc21fddda48df643aac1baae1"
 dependencies = [
  "aarch64-cpu",
  "cfg-if",
