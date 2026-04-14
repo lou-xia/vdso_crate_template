@@ -11,6 +11,8 @@ make utest
 - `ARCH`：默认`riscv64`，可选`x86_64`、`aarch64`、`riscv64`
 - `LOG`：默认`error`，可选`trace`、`debug`、`info`、`warn`、`error`
 
+目前的编译流程在so文件发生变化时（例如vdso内部代码修改或切换`ARCH`），第一次编译依然引用旧版的so文件，导致可能出现运行错误。在第二次编译时即可正常运行。
+
 ## vDSO简介
 
 **vDSO**（Virtual Dynamic Shared Object，虚拟动态共享对象）是 Linux 内核提供的一种机制，用来高效地将某些内核服务暴露给用户空间，而无需进行用户态到内核态的系统调用（syscall）切换。
