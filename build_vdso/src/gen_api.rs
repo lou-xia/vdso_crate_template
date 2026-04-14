@@ -1,4 +1,4 @@
-use std::{fmt::format, fs, path::Path};
+use std::{fs, path::Path};
 
 use xmas_elf::symbol_table::Entry;
 
