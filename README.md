@@ -1,5 +1,16 @@
 # vDSO共享库构建工具
 
+## 运行测试程序
+
+```shell
+make utest
+```
+
+可选的环境变量：
+
+- `ARCH`：默认`riscv64`，可选`x86_64`、`aarch64`、`riscv64`
+- `LOG`：默认`error`，可选`trace`、`debug`、`info`、`warn`、`error`
+
 ## vDSO简介
 
 **vDSO**（Virtual Dynamic Shared Object，虚拟动态共享对象）是 Linux 内核提供的一种机制，用来高效地将某些内核服务暴露给用户空间，而无需进行用户态到内核态的系统调用（syscall）切换。

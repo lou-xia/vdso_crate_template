@@ -82,7 +82,7 @@ fn gen_linker_script(arch: &str) -> String {
         _ => panic!("Unsupported arch"),
     };
     let linker = format!(
-r#"OUTPUT_ARCH({})
+        r#"OUTPUT_ARCH({})
 
 SECTIONS {{
     . = SIZEOF_HEADERS;
@@ -208,7 +208,10 @@ fn build_so(config: &BuildConfig) {
     // wrappper输出目录
     let wrapper_dir = out_dir.join("vdso_wrapper");
     // 构建编译命令
-    cargo.current_dir(&wrapper_dir).env("ARCH", &config.arch).args(cargo_args);
+    cargo
+        .current_dir(&wrapper_dir)
+        .env("ARCH", &config.arch)
+        .args(cargo_args);
     println!("----------------cargo command----------------");
     println!("{:?}", &cargo);
     // output()会触发执行命令并等待完成
@@ -282,6 +285,8 @@ fn version_script_content(config: &BuildConfig) -> String {
 }
 
 fn exported_symbols(config: &BuildConfig) -> Vec<String> {
+    let mut symbols: Vec<String> = Vec::new();
+
     let api_rs_path = Path::new(&config.src_dir).join("src").join("api.rs");
     let api_source = fs::read_to_string(&api_rs_path).unwrap();
     let re = regex::Regex::new(
@@ -289,7 +294,21 @@ fn exported_symbols(config: &BuildConfig) -> Vec<String> {
     )
     .unwrap();
 
-    re.captures_iter(&api_source)
+    let mut api_symbols: Vec<String> = re
+        .captures_iter(&api_source)
         .map(|capture| capture[1].to_string())
-        .collect()
+        .collect();
+    symbols.append(&mut api_symbols);
+
+    let interface_rs_path = Path::new(&config.src_dir).join("src").join("interface.rs");
+    let interface_source = fs::read_to_string(&interface_rs_path).unwrap();
+    let re = regex::Regex::new(r#"pub trait ([a-zA-Z0-9_]+) \{([^\{\}]+)\}"#).unwrap();
+
+    let mut interface_symbols: Vec<String> = re
+        .captures_iter(&interface_source)
+        .map(|capture| format!("init_vtable_{}", capture.extract::<2>().1[0]))
+        .collect();
+    symbols.append(&mut interface_symbols);
+
+    symbols
 }
