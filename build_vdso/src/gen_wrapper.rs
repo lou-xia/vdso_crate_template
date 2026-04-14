@@ -21,7 +21,7 @@ name = "vdso_wrapper"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["staticlib"]
 
 [profile.dev]
 panic = "abort"
