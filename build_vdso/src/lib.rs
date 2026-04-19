@@ -211,6 +211,7 @@ fn build_so(config: &BuildConfig) {
     cargo
         .current_dir(&wrapper_dir)
         .env("ARCH", &config.arch)
+        .env("RUSTFLAGS", "-C force-frame-pointers=yes")
         .args(cargo_args);
     println!("----------------cargo command----------------");
     println!("{:?}", &cargo);
