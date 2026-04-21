@@ -245,11 +245,25 @@ fn api_rs_content(config: &BuildConfig) -> String {
         r#"
 /// 在加载vDSO的地址空间（通常是内核）中调用，同时加载vDSO和初始化VTABLE。
 /// 
+/// 若在一个地址空间中加载再映射到另一个地址空间中，需使用`map_and_init`。
+/// 
 /// 该函数的返回值为vDSO和vVAR的映射区域的信息，元组的三项依次为首地址、大小和访问权限。vDSO首地址为第二个映射区域的首地址。
 /// 
 /// 在调用该库的其余API前，需先调用此函数。
 pub fn load_and_init() -> Vec<(*mut u8, usize, MappingFlags)> {
     let regions = crate::load_so();
+    let vdso = regions[1].0; // vDSO首地址为第二个映射区域的首地址，因为第一个是vVAR。
+    unsafe{ init_vdso_vtable(vdso as _) };
+    regions
+}
+
+/// 将已加载的vdso映射到另一个地址空间，并初始化VTABLE。
+/// 
+/// 该函数的返回值为vDSO和vVAR的映射区域的信息，元组的四项依次为用户虚拟地址、内核虚拟地址、大小和访问权限。vDSO首地址为第二个映射区域的首地址。
+/// 
+/// 在调用该库的其余API前，需先调用此函数。
+pub fn map_and_init(vspace: usize) -> Vec<(*mut u8, *mut u8, usize, MappingFlags)> {
+    let regions = crate::map_so(vspace);
     let vdso = regions[1].0; // vDSO首地址为第二个映射区域的首地址，因为第一个是vVAR。
     unsafe{ init_vdso_vtable(vdso as _) };
     regions
@@ -361,23 +375,54 @@ pub use page_table_entry::MappingFlags;
 use {}::VvarData;
 use xmas_elf::program::SegmentData;
 use alloc::vec::Vec;
+use core::sync::atomic::{{AtomicPtr, Ordering}};
 "#,
         config.package_name
     );
 
     let interface_content = String::from(
         r#"
+/// 在内核初始化时加载vDSO使用的接口。
+/// 
+/// 实现了这些接口后，可以调用`loader::load_so`或`api::load_and_init`
 #[def_interface]
 pub trait MemIf {
     /// 分配用于vDSO和vVAR的空间，返回指向首地址的指针。
+    /// 
+    /// 保证size为build_vdso传入的config.page_size的整数倍；
+    /// 要求返回的地址也为config.page_size的整数倍。
     ///
     /// 若需要实现vDSO和vVAR在多地址空间的共享，则需要在分配时使这块空间可被共享。
     fn alloc(size: usize) -> *mut u8;
 
     /// 从`alloc`返回的空间中，设置其中一块的访问权限。
+    /// 
+    /// 保证addr对齐到build_vdso传入的config.page_size；len为config.page_size的整数倍。
+    /// 如果从so文件中解析出的段基址不对齐，则panic；段长度不为config.page_size的整数倍则向上取整。
     ///
     /// `flags`可能包含：READ、WRITE、EXECUTE、USER。
     fn protect(addr: *mut u8, len: usize, flags: MappingFlags);
+}
+
+/// 将已加载的vDSO映射到其它地址空间使用的接口。
+/// 
+/// 实现了这些接口后，可以调用`loader::map_so`或`api::map_and_init`
+#[def_interface]
+pub trait UserMemIf {
+    /// 在地址空间中分配用于vDSO和vVAR的虚存区域（不需同时分配物理页面），返回指向首地址的指针。
+    /// 
+    /// 保证size为build_vdso传入的config.page_size的整数倍。
+    /// 要求返回的地址也为config.page_size的整数倍。
+    fn ualloc(vspace: usize, size: usize) -> *mut u8;
+
+    /// 从`alloc`返回的虚存区域中，映射其中一块到某个内核虚拟地址所指示的物理页面并设置权限。
+    /// 
+    /// 被映射的物理页面可能和其它地址空间共享，也可能由这个地址空间独占。
+    /// 
+    /// 保证uaddr、kaddr对齐到build_vdso传入的config.page_size；len为config.page_size的整数倍。
+    ///
+    /// `flags`可能包含：READ、WRITE、EXECUTE、USER。
+    fn map(vspace: usize, uaddr: *mut u8, kaddr: *mut u8, len: usize, flags: MappingFlags);
 }
 "#,
     );
@@ -394,8 +439,10 @@ const VVAR_SIZE: usize = (core::mem::size_of::<VvarData>() + PAGES_SIZE - 1) & (
 
     let load_so_content = String::from(
         r#"
+static KBASE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
 pub fn load_so() -> Vec<(*mut u8, usize, MappingFlags)> {
     let vdso_map = call_interface!(MemIf::alloc(VVAR_SIZE + VDSO_SIZE));
+    KBASE.store(vdso_map, Ordering::Release);
     let mut regions = Vec::new();
     #[cfg(feature = "log")]
     {
@@ -413,25 +460,25 @@ pub fn load_so() -> Vec<(*mut u8, usize, MappingFlags)> {
 
     // vVAR初始化
     #[cfg(feature = "log")]
-    log::info!("mapping vVAR...");
+    log::info!("loading vVAR...");
     #[cfg(feature = "log")]
     log::info!(
         "protect: [0x{:016x}, 0x{:016x}), {:?}",
         vdso_map as usize,
-        (vdso_map as usize) + core::mem::size_of::<VvarData>(),
+        vdso_map as usize + VVAR_SIZE,
         MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER
     );
     call_interface!(MemIf::protect(
         vdso_map,
-        core::mem::size_of::<VvarData>(),
+        VVAR_SIZE,
         MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER
     ));
-    regions.push((vdso_map, core::mem::size_of::<VvarData>(), MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER));
+    regions.push((vdso_map, VVAR_SIZE, MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER));
     unsafe { (vdso_map as *mut _ as *mut VvarData).write(VvarData::default()) };
 
     // vDSO初始化
     #[cfg(feature = "log")]
-    log::info!("mapping vDSO...");
+    log::info!("loading vDSO...");
 
     let vdso_elf = xmas_elf::ElfFile::new(VDSO).expect("Error parsing app ELF file.");
     if let Some(interp) = vdso_elf
@@ -486,19 +533,21 @@ pub fn load_so() -> Vec<(*mut u8, usize, MappingFlags)> {
             unsafe { core::ptr::write_bytes(segment.vaddr.as_usize() as *mut u8, 0, segment.size) };
         }
 
+        assert!(segment.vaddr.as_usize() & (PAGES_SIZE - 1) == 0);
+        let size = (segment.size + PAGES_SIZE - 1) & (!(PAGES_SIZE - 1));
         #[cfg(feature = "log")]
         log::info!(
             "protect: [0x{:016x}, 0x{:016x}), {:?}",
             segment.vaddr.as_usize(),
-            segment.vaddr.as_usize() + segment.size,
+            segment.vaddr.as_usize() + size,
             segment.flags
         );
         call_interface!(MemIf::protect(
             segment.vaddr.as_usize() as *mut u8,
-            segment.size,
+            size,
             segment.flags
         ));
-        regions.push((segment.vaddr.as_usize() as *mut u8, segment.size, segment.flags));
+        regions.push((segment.vaddr.as_usize() as *mut u8, size, segment.flags));
     }
 
     for relocate_pair in relocate_pairs {
@@ -523,6 +572,173 @@ pub fn load_so() -> Vec<(*mut u8, usize, MappingFlags)> {
 }
 "#,
     );
+    let map_so_content = String::from(
+        r#"
+/// 返回值：Vec<(uaddr, kaddr, len, flags)>
+pub fn map_so(vspace: usize) -> Vec<(*mut u8, *mut u8, usize, MappingFlags)> {
+    let ubase = call_interface!(UserMemIf::ualloc(vspace, VVAR_SIZE + VDSO_SIZE));
+    let kbase = KBASE.load(Ordering::Acquire);
+    let mut regions = Vec::new();
+    #[cfg(feature = "log")]
+    {
+        log::info!(
+            "vVAR: uaddr[0x{:016x}, 0x{:016x}), kaddr[0x{:016x}, 0x{:016x})",
+            ubase as usize,
+            (ubase as usize) + VVAR_SIZE,
+            kbase as usize,
+            (kbase as usize) + VVAR_SIZE,
+        );
+        log::info!(
+            "vDSO: uaddr[0x{:016x}, 0x{:016x}), kaddr[0x{:016x}, 0x{:016x})",
+            (ubase as usize) + VVAR_SIZE,
+            (ubase as usize) + VVAR_SIZE + VDSO_SIZE,
+            (kbase as usize) + VVAR_SIZE,
+            (kbase as usize) + VVAR_SIZE + VDSO_SIZE,
+        );
+    }
 
-    use_content + &interface_content + &const_content + &load_so_content
+    // vVAR初始化
+    #[cfg(feature = "log")]
+    log::info!("mapping vVAR...");
+    #[cfg(feature = "log")]
+    log::info!(
+        "map: uaddr[0x{:016x}, 0x{:016x}), kaddr[0x{:016x}, 0x{:016x}), {:?}",
+        ubase as usize,
+        ubase as usize + VVAR_SIZE,
+        kbase as usize,
+        kbase as usize + VVAR_SIZE,
+        MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER
+    );
+    call_interface!(UserMemIf::map(
+        vspace,
+        ubase,
+        kbase,
+        VVAR_SIZE,
+        MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER
+    ));
+    regions.push((ubase, kbase, VVAR_SIZE, MappingFlags::READ | MappingFlags::WRITE | MappingFlags::USER));
+
+    // vDSO初始化
+    #[cfg(feature = "log")]
+    log::info!("mapping vDSO...");
+
+    let vdso_elf = xmas_elf::ElfFile::new(VDSO).expect("Error parsing app ELF file.");
+    if let Some(interp) = vdso_elf
+        .program_iter()
+        .find(|ph| ph.get_type() == Ok(xmas_elf::program::Type::Interp))
+    {
+        let interp = match interp.get_data(&vdso_elf) {
+            Ok(SegmentData::Undefined(data)) => data,
+            _ => panic!("Invalid data in Interp Elf Program Header"),
+        };
+
+        let interp_path = from_utf8(interp).expect("Interpreter path isn't valid UTF-8");
+        // remove trailing '\0'
+        let _interp_path = interp_path.trim_matches(char::from(0)).to_string();
+        #[cfg(feature = "log")]
+        log::debug!("Interpreter path: {:?}", _interp_path);
+    }
+    let elf_base_addr = Some((ubase as usize) + VVAR_SIZE);
+    let segments = elf_parser::get_elf_segments(&vdso_elf, elf_base_addr);
+    let relocate_pairs = elf_parser::get_relocate_pairs(&vdso_elf, elf_base_addr);
+    for segment in segments {
+        if segment.size == 0 {
+            #[cfg(feature = "log")]
+            log::warn!(
+                "Segment with size 0 found, skipping: {:?}, {:#x}, {:?}",
+                segment.vaddr,
+                segment.size,
+                segment.flags
+            );
+            continue;
+        }
+        #[cfg(feature = "log")]
+        log::debug!(
+            "{:?}, {:#x}, {:?}",
+            segment.vaddr,
+            segment.size,
+            segment.flags
+        );
+
+        assert!(segment.vaddr.as_usize() & (PAGES_SIZE - 1) == 0);
+        let size = (segment.size + PAGES_SIZE - 1) & (!(PAGES_SIZE - 1));
+
+        let kaddr = if segment.flags.contains(MappingFlags::EXECUTE) {
+            // 代码段，和内核、其它进程共享
+            let kaddr = segment.vaddr.as_usize() + kbase as usize - ubase as usize;
+            // 确认代码段没有重定位
+            for relocate_pair in &relocate_pairs {
+                let relo_dst: usize = relocate_pair.dst.into();
+                if segment.vaddr.as_usize() <= relo_dst && relo_dst < segment.vaddr.as_usize() + size {
+                    panic!("Relocate pair found in text section!");
+                }
+            }
+            kaddr as *mut u8
+        }
+        else {
+            // 数据段，单独分配
+            let kaddr = call_interface!(MemIf::alloc(size));
+            if let Some(data) = segment.data {
+                assert!(data.len() <= size);
+                let src = data.as_ptr();
+                let dst = kaddr;
+                let count = data.len();
+                unsafe {
+                    core::ptr::copy_nonoverlapping(src, dst, count);
+                    if size > count {
+                        core::ptr::write_bytes(dst.add(count), 0, size - count);
+                    }
+                }
+                for relocate_pair in &relocate_pairs {
+                    let relo_src: usize = relocate_pair.src.into();
+                    let relo_dst: usize = relocate_pair.dst.into();
+                    let count = relocate_pair.count;
+                    if segment.vaddr.as_usize() <= relo_dst && relo_dst < segment.vaddr.as_usize() + size {
+                        let relo_kdst: usize = relo_dst - segment.vaddr.as_usize() + kaddr as usize;
+                        #[cfg(feature = "log")]
+                        log::info!(
+                            "Relocate: src: 0x{:x}, udst: 0x{:x}, kdst: 0x{:x}, count: {}",
+                            relo_src,
+                            relo_dst,
+                            relo_kdst,
+                            count
+                        );
+                        unsafe { core::ptr::copy_nonoverlapping(relo_src.to_ne_bytes().as_ptr(), relo_kdst as *mut u8, count) }
+                    }
+                }
+            } else {
+                unsafe { core::ptr::write_bytes(kaddr, 0, size) };
+            }
+            kaddr
+        };
+
+        #[cfg(feature = "log")]
+        log::info!(
+            "map: uaddr[0x{:016x}, 0x{:016x}), kaddr[0x{:016x}, 0x{:016x}), {:?}",
+            segment.vaddr.as_usize(),
+            segment.vaddr.as_usize() + size,
+            kaddr as usize,
+            kaddr as usize + size,
+            segment.flags
+        );
+        call_interface!(UserMemIf::map(
+            vspace,
+            segment.vaddr.as_usize() as *mut u8,
+            kaddr,
+            size,
+            segment.flags
+        ));
+        regions.push((segment.vaddr.as_usize() as *mut u8, kaddr, size, segment.flags));
+    }
+
+    #[cfg(feature = "log")]
+    log::info!("mapping complete!");
+
+    // ((vdso_map as usize) + VVAR_SIZE) as _
+    regions
+}
+"#,
+    );
+
+    use_content + &interface_content + &const_content + &load_so_content + &map_so_content
 }
