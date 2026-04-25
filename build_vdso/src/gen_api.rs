@@ -241,6 +241,36 @@ fn api_rs_content(config: &BuildConfig) -> String {
     "#,
     );
 
+    //     fn_init_vdso_vtable_str.push_str(
+    //         r#"
+    // /// 在加载vDSO的地址空间（通常是内核）中调用，同时加载vDSO和初始化VTABLE。
+    // ///
+    // /// 若在一个地址空间中加载再映射到另一个地址空间中，需使用`map_and_init`。
+    // ///
+    // /// 该函数的返回值为vDSO和vVAR的映射区域的信息，元组的三项依次为首地址、大小和访问权限。vDSO首地址为第二个映射区域的首地址。
+    // ///
+    // /// 在调用该库的其余API前，需先调用此函数。
+    // pub fn load_and_init() -> Vec<(*mut u8, usize, MappingFlags)> {
+    //     let regions = crate::load_so();
+    //     let vdso = regions[1].0; // vDSO首地址为第二个映射区域的首地址，因为第一个是vVAR。
+    //     unsafe{ init_vdso_vtable(vdso as _) };
+    //     regions
+    // }
+
+    // /// 将已加载的vdso映射到另一个地址空间，并初始化VTABLE。
+    // ///
+    // /// 该函数的返回值为vDSO和vVAR的映射区域的信息，元组的四项依次为用户虚拟地址、内核虚拟地址、大小和访问权限。vDSO首地址为第二个映射区域的首地址。
+    // ///
+    // /// 在调用该库的其余API前，需先调用此函数。
+    // pub fn map_and_init(vspace: usize) -> Vec<(*mut u8, *mut u8, usize, MappingFlags)> {
+    //     let regions = crate::map_so(vspace);
+    //     let vdso = regions[1].0; // vDSO首地址为第二个映射区域的首地址，因为第一个是vVAR。
+    //     unsafe{ init_vdso_vtable(vdso as _) };
+    //     regions
+    // }
+    // "#,
+    //     );
+
     fn_init_vdso_vtable_str.push_str(
         r#"
 /// 在加载vDSO的地址空间（通常是内核）中调用，同时加载vDSO和初始化VTABLE。
@@ -252,18 +282,6 @@ fn api_rs_content(config: &BuildConfig) -> String {
 /// 在调用该库的其余API前，需先调用此函数。
 pub fn load_and_init() -> Vec<(*mut u8, usize, MappingFlags)> {
     let regions = crate::load_so();
-    let vdso = regions[1].0; // vDSO首地址为第二个映射区域的首地址，因为第一个是vVAR。
-    unsafe{ init_vdso_vtable(vdso as _) };
-    regions
-}
-
-/// 将已加载的vdso映射到另一个地址空间，并初始化VTABLE。
-/// 
-/// 该函数的返回值为vDSO和vVAR的映射区域的信息，元组的四项依次为用户虚拟地址、内核虚拟地址、大小和访问权限。vDSO首地址为第二个映射区域的首地址。
-/// 
-/// 在调用该库的其余API前，需先调用此函数。
-pub fn map_and_init(vspace: usize) -> Vec<(*mut u8, *mut u8, usize, MappingFlags)> {
-    let regions = crate::map_so(vspace);
     let vdso = regions[1].0; // vDSO首地址为第二个映射区域的首地址，因为第一个是vVAR。
     unsafe{ init_vdso_vtable(vdso as _) };
     regions
@@ -440,7 +458,7 @@ const VVAR_SIZE: usize = (core::mem::size_of::<VvarData>() + PAGES_SIZE - 1) & (
     let load_so_content = String::from(
         r#"
 static KBASE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
-pub fn load_so() -> Vec<(*mut u8, usize, MappingFlags)> {
+pub(crate) fn load_so() -> Vec<(*mut u8, usize, MappingFlags)> {
     let vdso_map = call_interface!(MemIf::alloc(VVAR_SIZE + VDSO_SIZE));
     KBASE.store(vdso_map, Ordering::Release);
     let mut regions = Vec::new();
@@ -574,7 +592,11 @@ pub fn load_so() -> Vec<(*mut u8, usize, MappingFlags)> {
     );
     let map_so_content = String::from(
         r#"
-/// 返回值：Vec<(uaddr, kaddr, len, flags)>
+/// 将已加载的vdso映射到另一个地址空间。
+/// 
+/// 该函数的返回值为vDSO和vVAR的映射区域的信息，元组的四项依次为用户虚拟地址、内核虚拟地址、大小和访问权限。vDSO首地址为第二个映射区域的首地址。
+/// 
+/// 需在内核调用此函数映射到用户空间，再在用户空间中调用`init_vdso_vtable`。
 pub fn map_so(vspace: usize) -> Vec<(*mut u8, *mut u8, usize, MappingFlags)> {
     let ubase = call_interface!(UserMemIf::ualloc(vspace, VVAR_SIZE + VDSO_SIZE));
     let kbase = KBASE.load(Ordering::Acquire);
