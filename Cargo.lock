@@ -167,6 +167,7 @@ dependencies = [
  "crate_interface",
  "elf_parser",
  "include_bytes_aligned",
+ "lazyinit",
  "log",
  "page_table_entry",
  "vdso_example",
