@@ -141,7 +141,7 @@ fn main() {
     log::info!("Starting VDSO test...");
     // let regions = load_and_init(0);
     load_and_init(0);
-    println!("vDSO and vVAR loaded with the following regions:");
+    // println!("vDSO and vVAR loaded with the following regions:");
     // for (i, (addr, size, flags)) in regions.iter().enumerate() {
     //     println!(
     //         "Region {}: Address = 0x{:016x}, Size = {}, Flags = {:?}",

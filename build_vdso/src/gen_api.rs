@@ -889,6 +889,10 @@ pub fn map_so(vspace: usize) -> *mut u8 {
     #[cfg(feature = "log")]
     log::info!("mapping complete!");
 
+    if !KERNEL_VDSO_REGIONS.is_inited() {
+        KERNEL_VDSO_REGIONS.init_once(regions);
+    }
+
     ((vbase as usize) + VVAR_SIZE) as _
 }
 "#,
