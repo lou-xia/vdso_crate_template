@@ -32,6 +32,9 @@ SECTIONS {
         *(.text .text.*)
     } :text_seg
 
+    . = ALIGN(4K);
+    .plt : { *(.plt .plt.*) } :text_seg
+
     /* 只读数据段 */
     . = ALIGN(4K);
     .rodata         : {
@@ -39,8 +42,8 @@ SECTIONS {
         *(.note.*)
     } :ro_seg
 
-    . = ALIGN(4K);
-    .plt : { *(.plt .plt.*) } :text_seg
+    .eh_frame_hdr   : { *(.eh_frame_hdr) } :ro_seg :eh_frame
+    .eh_frame       : { KEEP (*(.eh_frame)) } :ro_seg
 
     . = ALIGN(4K);
     .data           : {
@@ -53,7 +56,4 @@ SECTIONS {
         *(.bss .bss.* .gnu.linkonce.b.*)
         *(COMMON)
     } :data_seg
-
-    .eh_frame_hdr   : { *(.eh_frame_hdr) } :ro_seg :eh_frame
-    .eh_frame       : { KEEP (*(.eh_frame)) } :ro_seg
 }
